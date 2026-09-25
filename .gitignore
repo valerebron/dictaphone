@@ -1,2 +1,5 @@
 .Trash-1000/
 .test.txt.swp
+*.WAV
+*.txt
+

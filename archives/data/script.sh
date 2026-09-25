@@ -6,25 +6,17 @@ set -o pipefail
 
 # ==========================================================
 # DICTAPHONE USB
-# VERSION 2.3
+# VERSION 3.2
 #
-# Organisation :
+# Ajout V3.2 :
+#   - génération d'un nom de fichier basé sur la transcription
 #
-# DICTAPHONE/
-# ├── REC*.WAV
-# └── archives/
-#     ├── data/
-#     │   ├── script.sh
-#     │   └── whisper
-#     └── YYYY-MM-DD_HH-MM-SS.wav
-#         YYYY-MM-DD_HH-MM-SS.txt
+# Exemple :
 #
-# Le modèle Whisper est conservé dans le cache local :
+#   2026-08-27_15-42-08_reunion_client.wav
+#   2026-08-27_15-42-08_reunion_client.txt
 #
-# ~/.cache/dictaphone/whisper/ggml-small.bin
-#
-# Le traitement Whisper est effectué entièrement sur
-# le disque local.
+# L'identifiant date/heure reste toujours présent.
 # ==========================================================
 
 
@@ -38,8 +30,6 @@ ARCHIVES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 ROOT_DIR="$(cd "$ARCHIVES_DIR/.." && pwd)"
 
-
-# Binaire Whisper présent sur la clé
 WHISPER_SOURCE="$SCRIPT_DIR/whisper"
 
 
@@ -57,7 +47,7 @@ MODEL_SHA256="1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
 
 
 # ==========================================================
-# CACHE LOCAL PERSISTANT
+# CACHE LOCAL
 # ==========================================================
 
 CACHE_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/dictaphone"
@@ -116,7 +106,6 @@ cleanup() {
     fi
 }
 
-
 trap cleanup EXIT
 
 
@@ -138,7 +127,10 @@ check_dependencies() {
         mv \
         rm \
         sha256sum \
-        wc
+        wc \
+        sed \
+        tr \
+        fold
     do
 
         if ! command -v "$command" >/dev/null 2>&1; then
@@ -189,10 +181,6 @@ $MODEL_CACHE_DIR"
     fi
 
 
-    # ------------------------------------------------------
-    # MODELE DEJA PRESENT
-    # ------------------------------------------------------
-
     if [[ -f "$MODEL" ]]; then
 
         echo "Modèle trouvé dans le cache local."
@@ -230,10 +218,6 @@ $MODEL_CACHE_DIR"
     fi
 
 
-    # ------------------------------------------------------
-    # FICHIER TEMPORAIRE DE TELECHARGEMENT
-    # ------------------------------------------------------
-
     part="$MODEL_CACHE_DIR/$MODEL_NAME.part"
 
 
@@ -244,10 +228,6 @@ $MODEL_CACHE_DIR"
     echo "Taille attendue : environ 488 MB"
     echo ""
 
-
-    # ------------------------------------------------------
-    # CURL
-    # ------------------------------------------------------
 
     if command -v curl >/dev/null 2>&1; then
 
@@ -280,10 +260,6 @@ $MODEL_CACHE_DIR"
         fi
 
 
-    # ------------------------------------------------------
-    # WGET
-    # ------------------------------------------------------
-
     elif command -v wget >/dev/null 2>&1; then
 
         echo "Téléchargement avec wget..."
@@ -312,10 +288,6 @@ $MODEL_CACHE_DIR"
 
     fi
 
-
-    # ------------------------------------------------------
-    # VERIFICATION DU FICHIER TELECHARGE
-    # ------------------------------------------------------
 
     echo ""
     echo "Vérification du téléchargement..."
@@ -348,10 +320,6 @@ $MODEL_CACHE_DIR"
     echo "✓ Taille correcte"
 
 
-    # ------------------------------------------------------
-    # SHA-256
-    # ------------------------------------------------------
-
     echo ""
     echo "Calcul du SHA-256..."
     echo ""
@@ -381,10 +349,6 @@ $MODEL_CACHE_DIR"
 
     echo "✓ SHA-256 correct"
 
-
-    # ------------------------------------------------------
-    # INSTALLATION ATOMIQUE
-    # ------------------------------------------------------
 
     if ! mv -f "$part" "$MODEL"; then
 
@@ -429,20 +393,172 @@ check_wav_header() {
 
 
     if [[ "$riff" != "RIFF" ]]; then
-
         return 1
-
     fi
 
 
     if [[ "$wave" != "WAVE" ]]; then
-
         return 1
-
     fi
 
 
     return 0
+}
+
+
+# ==========================================================
+# GENERATION DU NOM INTELLIGENT
+# ==========================================================
+
+generate_smart_name() {
+
+    local text="$1"
+
+    local words
+    local word
+    local result=""
+    local count=0
+
+
+    # ------------------------------------------------------
+    # Nettoyage général
+    # ------------------------------------------------------
+
+    text="$(tr '\n' ' ' < "$text")"
+
+    text="$(sed \
+        -e 's/[[:space:]][[:space:]]*/ /g' \
+        -e 's/^ //' \
+        -e 's/ $//' \
+        <<< "$text")"
+
+
+    # ------------------------------------------------------
+    # Conversion en minuscules
+    # ------------------------------------------------------
+
+    text="$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')"
+
+
+    # ------------------------------------------------------
+    # Suppression de la ponctuation
+    # ------------------------------------------------------
+
+    text="$(printf '%s' "$text" | \
+        sed 's/[,.!?;:(){}\[\]"'"'"'«»…]/ /g')"
+
+
+    # ------------------------------------------------------
+    # Normalisation des accents
+    #
+    # On utilise iconv s'il est disponible.
+    # ------------------------------------------------------
+
+    if command -v iconv >/dev/null 2>&1; then
+
+        text="$(printf '%s' "$text" | \
+            iconv -f UTF-8 -t ASCII//TRANSLIT 2>/dev/null || true)"
+
+    fi
+
+
+    # ------------------------------------------------------
+    # Suppression des caractères non sûrs
+    # ------------------------------------------------------
+
+    text="$(printf '%s' "$text" | \
+        sed 's/[^a-z0-9_-]/ /g')"
+
+    text="$(printf '%s' "$text" | \
+        sed 's/[[:space:]][[:space:]]*/ /g')"
+
+
+    # ------------------------------------------------------
+    # Mots à ignorer
+    # ------------------------------------------------------
+
+    local stopwords="\
+a au aux avec ce ceci cela ces cette
+de des du
+en est et
+il ils
+je
+la le les
+lui
+ma mais me mes mon
+ne nos notre nous
+on ont ou
+par pas pour
+que quel quelle quels quelles qui
+se son sont
+sur
+ta te tes ton tous tout toute
+un une
+vos votre vous
+y"
+
+
+    # ------------------------------------------------------
+    # Extraction des mots significatifs
+    # ------------------------------------------------------
+
+    read -ra words <<< "$text"
+
+
+    for word in "${words[@]}"; do
+
+        [[ -n "$word" ]] || continue
+
+
+        # Mot trop court
+        if (( ${#word} < 3 )); then
+            continue
+        fi
+
+
+        # Mot générique
+        if grep -qx "$word" <<< "$stopwords"; then
+            continue
+        fi
+
+
+        if [[ -z "$result" ]]; then
+
+            result="$word"
+
+        else
+
+            result="${result}_${word}"
+
+        fi
+
+
+        count=$((count + 1))
+
+
+        # 4 mots maximum
+        if (( count >= 4 )); then
+            break
+        fi
+
+    done
+
+
+    # ------------------------------------------------------
+    # Limitation de longueur
+    # ------------------------------------------------------
+
+    if [[ -n "$result" ]]; then
+
+        result="${result:0:55}"
+
+        # éviter un underscore final
+        result="${result%_}"
+
+    fi
+
+
+    printf '%s' "$result"
 }
 
 
@@ -453,7 +569,7 @@ check_wav_header() {
 echo ""
 echo "=========================================="
 echo "          DICTAPHONE USB"
-echo "             VERSION 2.3"
+echo "             VERSION 3.2"
 echo "=========================================="
 echo ""
 
@@ -466,7 +582,7 @@ check_dependencies
 
 
 # ==========================================================
-# VERIFICATION DE L'EMPLACEMENT
+# VERIFICATION WHISPER
 # ==========================================================
 
 if [[ ! -f "$WHISPER_SOURCE" ]]; then
@@ -486,7 +602,7 @@ echo "✓ Whisper trouvé"
 
 
 # ==========================================================
-# VERIFICATION DU DOSSIER ARCHIVES
+# ARCHIVES
 # ==========================================================
 
 if [[ ! -d "$ARCHIVES_DIR" ]]; then
@@ -543,7 +659,7 @@ LOCAL_TXT="$LOCAL_BASE.txt"
 
 
 # ==========================================================
-# COPIE DU BINAIRE
+# COPIE WHISPER
 # ==========================================================
 
 echo "Copie de Whisper vers le disque local..."
@@ -593,10 +709,6 @@ for file in "$ROOT_DIR"/REC*.wav; do
 done
 
 
-# ----------------------------------------------------------
-# Suppression des doublons éventuels
-# ----------------------------------------------------------
-
 if (( ${#WAV_FILES[@]} > 0 )); then
 
     mapfile -t WAV_FILES < <(
@@ -632,7 +744,7 @@ done
 
 
 # ==========================================================
-# VALIDATION DE TOUS LES WAV
+# VALIDATION WAV
 # ==========================================================
 
 echo ""
@@ -661,26 +773,6 @@ echo "✓ Tous les WAV sont valides"
 # ==========================================================
 
 SESSION="$(date '+%Y-%m-%d_%H-%M-%S')"
-
-ARCHIVE_WAV="$ARCHIVES_DIR/$SESSION.wav"
-
-OUTPUT_TXT="$ROOT_DIR/$SESSION.txt"
-
-
-COUNTER=1
-
-
-while [[ -e "$ARCHIVE_WAV" || -e "$OUTPUT_TXT" ]]; do
-
-    SESSION="$(date '+%Y-%m-%d_%H-%M-%S')_$COUNTER"
-
-    ARCHIVE_WAV="$ARCHIVES_DIR/$SESSION.wav"
-
-    OUTPUT_TXT="$ROOT_DIR/$SESSION.txt"
-
-    COUNTER=$((COUNTER + 1))
-
-done
 
 
 # ==========================================================
@@ -736,7 +828,7 @@ done
 
 
 # ==========================================================
-# MISE A JOUR DU HEADER WAV
+# MISE A JOUR HEADER WAV
 # ==========================================================
 
 write_u32_le() {
@@ -744,7 +836,6 @@ write_u32_le() {
     local value="$1"
     local offset="$2"
     local file="$3"
-
 
     local b0=$(( value & 255 ))
     local b1=$(( (value >> 8) & 255 ))
@@ -870,6 +961,62 @@ echo "✓ Transcription terminée"
 
 
 # ==========================================================
+# GENERATION DU NOM
+# ==========================================================
+
+echo ""
+echo "=========================================="
+echo "          NOM DE LA SESSION"
+echo "=========================================="
+echo ""
+
+
+SMART_NAME="$(generate_smart_name "$LOCAL_TXT")"
+
+
+if [[ -n "$SMART_NAME" ]]; then
+
+    SESSION="${SESSION}_${SMART_NAME}"
+
+    echo "Nom généré :"
+    echo "$SESSION"
+
+else
+
+    echo "Aucun nom pertinent détecté."
+    echo "Nom générique conservé :"
+    echo "$SESSION"
+
+fi
+
+
+echo ""
+
+
+# ==========================================================
+# CHEMINS FINAUX
+# ==========================================================
+
+ARCHIVE_WAV="$ARCHIVES_DIR/$SESSION.wav"
+
+OUTPUT_TXT="$ROOT_DIR/$SESSION.txt"
+
+
+COUNTER=1
+
+
+while [[ -e "$ARCHIVE_WAV" || -e "$OUTPUT_TXT" ]]; do
+
+    ARCHIVE_WAV="$ARCHIVES_DIR/${SESSION}_$COUNTER.wav"
+
+    OUTPUT_TXT="$ROOT_DIR/${SESSION}_$COUNTER.txt"
+
+    COUNTER=$((COUNTER + 1))
+
+done
+
+
+# ==========================================================
 # ARCHIVAGE WAV
 # ==========================================================
 
@@ -936,14 +1083,14 @@ echo "✓ Transcription enregistrée"
 
 
 # ==========================================================
-# SYNCHRONISATION DES DONNEES
+# SYNCHRONISATION
 # ==========================================================
 
 sync
 
 
 # ==========================================================
-# SUPPRESSION DES ENREGISTREMENTS SOURCES
+# SUPPRESSION DES SOURCES
 # ==========================================================
 
 echo ""
