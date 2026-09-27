@@ -26,24 +26,70 @@ set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-ARCHIVES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-
-ROOT_DIR="$(cd "$ARCHIVES_DIR/.." && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 WHISPER_SOURCE="$SCRIPT_DIR/whisper"
 
 
+#SMALL
+MODEL_NAME_SMALL="ggml-small.bin"
+MODEL_URL_SMALL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
+MODEL_SIZE_SMALL="487601967"
+MODEL_SHA256_SMALL="1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
+
+# MEDIUM
+MODEL_NAME_MEDIUM="ggml-medium.bin"
+MODEL_URL_MEDIUM="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
+MODEL_SIZE_MEDIUM="1533763059"
+MODEL_SHA256_MEDIUM="6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208"
+
+#LARGE
+MODEL_NAME_LARGE="ggml-large-v3.bin"
+MODEL_URL_LARGE="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin"
+MODEL_SIZE_LARGE="3095033483"
+MODEL_SHA256_LARGE="64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2"
+
+
 # ==========================================================
-# MODELE WHISPER
+# MODELE PAR DEFAUT
 # ==========================================================
 
-MODEL_NAME="ggml-small.bin"
+DEFAULT_MODEL="medium"
 
-MODEL_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
+# Vérifie si un modèle est spécifié en paramètre
+if [[ $# -gt 0 ]]; then
+    case "$1" in
+        small|medium|large)
+            DEFAULT_MODEL="$1"
+            ;;
+        *)
+            echo "Usage: $0 [small|medium|large]"
+            exit 1
+            ;;
+    esac
+fi
 
-MODEL_SIZE="487601967"
-
-MODEL_SHA256="1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
+# Sélectionne le modèle à utiliser
+case "$DEFAULT_MODEL" in
+    small)
+        MODEL_NAME="$MODEL_NAME_SMALL"
+        MODEL_URL="$MODEL_URL_SMALL"
+        MODEL_SIZE="$MODEL_SIZE_SMALL"
+        MODEL_SHA256="$MODEL_SHA256_SMALL"
+        ;;
+    medium)
+        MODEL_NAME="$MODEL_NAME_MEDIUM"
+        MODEL_URL="$MODEL_URL_MEDIUM"
+        MODEL_SIZE="$MODEL_SIZE_MEDIUM"
+        MODEL_SHA256="$MODEL_SHA256_MEDIUM"
+        ;;
+    large)
+        MODEL_NAME="$MODEL_NAME_LARGE"
+        MODEL_URL="$MODEL_URL_LARGE"
+        MODEL_SIZE="$MODEL_SIZE_LARGE"
+        MODEL_SHA256="$MODEL_SHA256_LARGE"
+        ;;
+esac
 
 
 # ==========================================================
@@ -225,7 +271,9 @@ $MODEL_CACHE_DIR"
     echo ""
     echo "Téléchargement de $MODEL_NAME"
     echo ""
-    echo "Taille attendue : environ 488 MB"
+    # Calcul de la taille en Mo pour l'affichage
+    MODEL_SIZE_MB=$((MODEL_SIZE / 1024 / 1024))
+    echo "Taille attendue : environ ${MODEL_SIZE_MB} MiB (${MODEL_SIZE} octets)"
     echo ""
 
 
@@ -601,24 +649,6 @@ fi
 echo "✓ Whisper trouvé"
 
 
-# ==========================================================
-# ARCHIVES
-# ==========================================================
-
-if [[ ! -d "$ARCHIVES_DIR" ]]; then
-
-    if ! mkdir -p "$ARCHIVES_DIR"; then
-
-        error "Impossible de créer :
-
-$ARCHIVES_DIR"
-
-    fi
-
-fi
-
-
-echo "✓ Archives prêtes"
 
 
 # ==========================================================
@@ -997,7 +1027,7 @@ echo ""
 # CHEMINS FINAUX
 # ==========================================================
 
-ARCHIVE_WAV="$ARCHIVES_DIR/$SESSION.wav"
+ARCHIVE_WAV="$ROOT_DIR/$SESSION.wav"
 
 OUTPUT_TXT="$ROOT_DIR/$SESSION.txt"
 
@@ -1007,7 +1037,7 @@ COUNTER=1
 
 while [[ -e "$ARCHIVE_WAV" || -e "$OUTPUT_TXT" ]]; do
 
-    ARCHIVE_WAV="$ARCHIVES_DIR/${SESSION}_$COUNTER.wav"
+    ARCHIVE_WAV="$ROOT_DIR/${SESSION}_$COUNTER.wav"
 
     OUTPUT_TXT="$ROOT_DIR/${SESSION}_$COUNTER.txt"
 
@@ -1142,8 +1172,8 @@ echo "Transcription :"
 echo "  $SESSION.txt"
 echo ""
 
-echo "Archive audio :"
-echo "  archives/$SESSION.wav"
+echo "Audio :"
+echo "  $SESSION.wav"
 echo ""
 
 echo "$DELETED enregistrement(s) supprimé(s)."

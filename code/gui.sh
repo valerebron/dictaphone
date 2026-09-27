@@ -5,11 +5,11 @@ set -o pipefail
 
 # ==========================================================
 # DICTAPHONE USB
-# INTERFACE GRAPHIQUE — V3.2
+# INTERFACE GRAPHIQUE
 # ==========================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENGINE="$SCRIPT_DIR/script.sh"
 
 GUI_TMP=""
@@ -41,7 +41,9 @@ if [[ ! -f "$ENGINE" ]]; then
         --error \
         --title="Dictaphone" \
         --width=550 \
-        --text="Le moteur de transcription est introuvable :\n\n$ENGINE"
+        --text="<b>Le moteur de transcription est introuvable.</b>
+
+$ENGINE"
 
     exit 1
 fi
@@ -102,7 +104,9 @@ if (( COUNT == 0 )); then
         --info \
         --title="Dictaphone" \
         --width=450 \
-        --text="<b>Aucun enregistrement</b>\n\nIl n'y a actuellement aucun nouvel enregistrement à transcrire."
+        --text="<b>Aucun enregistrement</b>
+
+Il n'y a actuellement aucun nouvel enregistrement à transcrire."
 
     exit 0
 fi
@@ -114,25 +118,86 @@ fi
 LIST=""
 
 for file in "${WAV_FILES[@]}"; do
-    LIST="${LIST}• $(basename "$file")"$'\n'
+    LIST+="• $(basename "$file")"$'\n'
 done
 
 # ==========================================================
-# CONFIRMATION
+# MODELE PAR DEFAUT
 # ==========================================================
 
-CONFIRM_TEXT="<b>$COUNT enregistrement(s) trouvé(s)</b>"$'\n\n'"$LIST"$'\n'"Voulez-vous lancer la transcription ?"
+MODEL_CHOICE="${DICTAPHONE_MODEL:-medium}"
 
-if ! zenity \
-    --question \
-    --title="Dictaphone" \
-    --width=550 \
-    --text="$CONFIRM_TEXT" \
-    --ok-label="Transcrire" \
-    --cancel-label="Annuler"
-then
+case "$MODEL_CHOICE" in
+    small|medium|large)
+        ;;
+    *)
+        MODEL_CHOICE="medium"
+        ;;
+esac
+
+# ==========================================================
+# LIBELLE DU MODELE
+# ==========================================================
+
+case "$MODEL_CHOICE" in
+    small)
+        MODEL_LABEL="Small — rapide"
+        ;;
+    medium)
+        MODEL_LABEL="Medium — équilibré"
+        ;;
+    large)
+        MODEL_LABEL="Large — précis"
+        ;;
+esac
+
+# ==========================================================
+# FENETRE UNIQUE — SELECTION DU MODELE
+# ==========================================================
+
+FORM_RESULT="$(
+    zenity \
+        --forms \
+        --title="Dictaphone — Lancer la transcription" \
+        --width=420 \
+        --text="<b>$COUNT enregistrement(s) trouvé(s)</b>" \
+        --add-combo="" \
+        --combo-values="transcription — équilibré|transcription — rapide|transcription — précis" \
+        --ok-label="Lancer la transcription" \
+        --cancel-label="Annuler"
+)"
+
+FORM_STATUS=$?
+
+# ==========================================================
+# ANNULATION
+# ==========================================================
+
+if [[ "$FORM_STATUS" -ne 0 ]]; then
     exit 0
 fi
+
+# ==========================================================
+# RECUPERATION DU MODELE
+# ==========================================================
+
+case "$FORM_RESULT" in
+    "Small — rapide")
+        MODEL_CHOICE="small"
+        ;;
+
+    "Medium — équilibré")
+        MODEL_CHOICE="medium"
+        ;;
+
+    "Large — précis")
+        MODEL_CHOICE="large"
+        ;;
+
+    *)
+        MODEL_CHOICE="medium"
+        ;;
+esac
 
 # ==========================================================
 # EXECUTION DU MOTEUR
@@ -141,9 +206,12 @@ fi
 echo "Préparation..." > "$STATUS_FILE"
 
 (
-    bash "$ENGINE" > "$LOG_FILE" 2>&1
+    bash "$ENGINE" "$MODEL_CHOICE" > "$LOG_FILE" 2>&1
+
     RESULT=$?
+
     echo "$RESULT" > "$RESULT_FILE"
+
 ) &
 
 ENGINE_PID=$!
@@ -183,6 +251,7 @@ ENGINE_PID=$!
         echo "# Whisper travaille..."
 
         sleep 2
+
     done
 
     wait "$ENGINE_PID" 2>/dev/null || true
@@ -226,20 +295,19 @@ fi
 
 if [[ "$ENGINE_RESULT" != "0" ]]; then
 
-    ERROR_LOG=""
+    ERROR_TEXT="<b>La transcription n'a pas pu être terminée.</b>"$'\n\n'
+    ERROR_TEXT+="Les enregistrements originaux ont été conservés."
 
     if [[ -s "$LOG_FILE" ]]; then
-        ERROR_LOG="$(tail -20 "$LOG_FILE")"
+        ERROR_TEXT+=$'\n\n'
+        ERROR_TEXT+="<b>Détail :</b>"$'\n\n'
+        ERROR_TEXT+="$(tail -10 "$LOG_FILE")"
     fi
-
-    ERROR_TEXT="<b>La transcription n'a pas pu être terminée.</b>"$'\n\n'
-    ERROR_TEXT+="Les enregistrements originaux ont été conservés."$'\n\n'
-    ERROR_TEXT+="Vous pouvez réessayer."
 
     zenity \
         --error \
         --title="Dictaphone — Erreur" \
-        --width=600 \
+        --width=650 \
         --text="$ERROR_TEXT"
 
     exit 1
@@ -282,12 +350,17 @@ fi
 # RESULTAT FINAL
 # ==========================================================
 
-FINAL_TEXT="<b>✓ Transcription terminée</b>"$'\n\n'
+FINAL_TEXT="<b>Transcription terminée</b>"$'\n\n'
 FINAL_TEXT+="$COUNT enregistrement(s) ont été traité(s)."$'\n\n'
+
+FINAL_TEXT+="<b>Modèle utilisé :</b> $MODEL_CHOICE"$'\n\n'
+
 FINAL_TEXT+="<b>Transcription :</b>"$'\n'
 FINAL_TEXT+="$(basename "$LATEST_TXT")"$'\n\n'
+
 FINAL_TEXT+="<b>Archive audio :</b>"$'\n'
-FINAL_TEXT+="archives/"$'\n\n'
+FINAL_TEXT+="Racine de la clé USB"$'\n\n'
+
 FINAL_TEXT+="Les enregistrements originaux ont été traités avec succès."
 
 zenity \
@@ -298,4 +371,3 @@ zenity \
     --ok-label="Fermer"
 
 exit 0
-

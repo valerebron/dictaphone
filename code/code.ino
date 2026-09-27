@@ -12,6 +12,7 @@
 
 #include <USB.h>
 #include <USBMSC.h>
+#include "driver/rtc_io.h"
 
 // ============================================================
 // XIAO ESP32-S3 SENSE - DICTAPHONE
@@ -36,7 +37,10 @@
 //
 // USB:
 //   USB MSC exposes SD card.
-//   When recording, MSC media is removed.
+//   Media is ALWAYS present except while recording:
+//   - never toggled on USB connect/disconnect (instant mount)
+//   - removed only when recording starts (SD ownership)
+//   - restored when recording stops (no replug needed)
 // ============================================================
 
 
@@ -86,6 +90,7 @@
 
 #define MSC_IDLE_BEFORE_TAKEOVER_MS  1500UL
 #define TAKEOVER_HOLD_MS             1200UL
+#define DEEP_SLEEP_AFTER_MS           120000UL
 
 
 // ============================================================
@@ -120,6 +125,8 @@ RecorderState state = STATE_IDLE;
 volatile bool usbMounted = false;
 volatile bool mscHostActive = false;
 volatile bool mscEjected = false;
+
+uint32_t lastActivityMs = 0;
 
 // IMPORTANT:
 // USB callback runs from another task.
@@ -171,6 +178,8 @@ void processPendingUSBEvents();
 void synchronizeUSBState();
 
 bool initializeI2S();
+
+void enterDeepSleepIfIdle();
 
 bool startRecording();
 void stopRecording();
@@ -363,10 +372,12 @@ void processPendingUSBEvents()
         mscHostActive = false;
         mscEjected = false;
 
-        // Le PC n'a plus le bus USB.
-        // On remet immédiatement le média dans un état
-        // cohérent pour le mode dictaphone.
-        disableMSCMedium();
+        // IMPORTANT:
+        // Le bus USB n'existe plus: ne PAS retirer le média.
+        // Le MSC reste dans l'état "média présent" pour que
+        // le prochain branchement monte instantanément.
+        // mediaPresent(false) ne doit exister QUE dans
+        // startRecording()/takeoverSDForPTT().
 
         if (state != STATE_RECORDING)
         {
@@ -376,7 +387,7 @@ void processPendingUSBEvents()
         }
 
         Serial.println(
-            "[USB] SD LIBERATED"
+            "[USB] MEDIUM KEPT READY (no toggle on unplug)"
         );
 
         Serial.println(
@@ -770,8 +781,14 @@ bool configureMSC()
         true
     );
 
+    // IMPORTANT:
+    // Le média est déclaré PRESENT dès le départ.
+    // La SD est prête à ce stade (initializeSD a réussi).
+    // Le cacher au boot provoque des "unit not ready" côté
+    // hôte -> retries Linux ~30 s -> montage lent, double
+    // clic dans Nautilus, montage read-only.
     MSC.mediaPresent(
-        false
+        true
     );
 
     if (!MSC.begin(
@@ -1222,6 +1239,16 @@ void stopRecording()
         "[REC] %lu bytes\n",
         (unsigned long)recordDataBytes
     );
+
+    // --------------------------------------------------------
+    // Le média redevient visible pour le PC sans avoir à
+    // débrancher/rebrancher le câble USB.
+    // --------------------------------------------------------
+
+    if (mscConfigured)
+    {
+        enableMSCMedium();
+    }
 
     state =
         STATE_IDLE;
@@ -1738,6 +1765,8 @@ void setup()
         INPUT_PULLUP
     );
 
+    lastActivityMs = millis();
+
     pinMode(
         LED_MIC_PIN,
         OUTPUT
@@ -1844,6 +1873,56 @@ void setup()
 
 
 // ============================================================
+// DEEP SLEEP
+// ============================================================
+
+void enterDeepSleepIfIdle()
+{
+    if (state == STATE_RECORDING)
+        return;
+
+    // USB MSC reste prioritaire : on ne dort jamais pendant une
+    // connexion ou une activité du PC.
+    if (usbMounted || mscHostActive)
+        return;
+
+    if ((uint32_t)(millis() - lastActivityMs) < DEEP_SLEEP_AFTER_MS)
+        return;
+
+    // PTT est actif à LOW. S'il est encore appuyé, ne pas dormir :
+    // sinon le niveau LOW provoquerait un réveil immédiat.
+    if (digitalRead(PTT_PIN) == LOW)
+    {
+        lastActivityMs = millis();
+        return;
+    }
+
+    Serial.println();
+    Serial.println("[POWER] Deep sleep");
+    Serial.println("[POWER] Wake-up = PTT GPIO1 LOW");
+    Serial.flush();
+
+    // En IDLE, I2S est normalement déjà arrêté.
+    I2S.end();
+
+    // Arrêt propre de l'interface SD avant le sommeil.
+    if (sdReady)
+    {
+        SD.end();
+        digitalWrite(SD_CS_PIN, HIGH);
+    }
+
+    // GPIO1 est un RTC GPIO sur ESP32-S3.
+    // Le PTT utilise INPUT_PULLUP : appui = LOW.
+    pinMode(PTT_PIN, INPUT_PULLUP);
+    esp_sleep_enable_ext0_wakeup(GPIO_NUM_1, 0);
+
+    delay(10);
+    esp_deep_sleep_start();
+}
+
+
+// ============================================================
 // LOOP
 // ============================================================
 
@@ -1859,10 +1938,19 @@ void loop()
 
     handleButton();
 
+    if (digitalRead(PTT_PIN) == LOW)
+    {
+        lastActivityMs = millis();
+    }
+
     if (state ==
         STATE_RECORDING)
     {
         processRecording();
+    }
+    else
+    {
+        enterDeepSleepIfIdle();
     }
 
     delay(1);
