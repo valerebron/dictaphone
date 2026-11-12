@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "compile": "arduino-cli compile --fqbn 'esp30:esp32:XIAO_ESP32S3:USBMode=default' .",
+    "upload": "arduino-cli upload -p /dev/ttyACM-2 --fqbn 'esp32:esp32:XIAO_ESP32S3' .",
+    "monitor": "arduino-cli monitor -p /dev/ttyACM-2 -c baudrate=115200",
+    "send": " arduino-compile && arduino-upload && arduino-monitor"
+  } 
+}
+
